@@ -73,10 +73,10 @@ class BaseMCA:
 
         # --- Handling the error correction logic ---
         # Prefer environmental variable override; otherwise honor YAML; otherwise keep default.
-        if "EC" in os.environ.keys():
-            self.ERR_CORR = int(os.environ["EC"])
         if "errCorr" in self.exp_config["exp_params"].keys():
             self.ERR_CORR = self.exp_config["exp_params"]["errCorr"]
+        if "EC" in os.environ.keys():
+            self.ERR_CORR = int(os.environ["EC"])
 
         # Check whether the MCA grid size matches the number of MPI processes
         if self.size - 1 != self.mcaRows*self.mcaCols:

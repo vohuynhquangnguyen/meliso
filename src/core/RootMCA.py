@@ -130,13 +130,20 @@ class RootMCA(BaseMCA):
                 mat = mat.toarray()
         elif filename.endswith('.npy'):
             mat = np.load(filename)
+        elif filename.endswith('.npz'):
+            with np.load(filename, allow_pickle=False) as npzfile:
+                keys = list(npzfile.keys())
+                if not keys:
+                    raise Exception(f"NpzFileEmptyError: {filename} contains no arrays")
+                key = next((k for k in ("A", "matrix") if k in keys), keys[0])
+                mat = np.asarray(npzfile[key])
         elif filename.endswith('.csv'):
             mat = np.loadtxt(filename, delimiter=',')
         elif filename.endswith('.txt'):
             mat = np.loadtxt(filename, delimiter=',')
         else:
             raise Exception("MatrixFileFormatError: The file format is not supported. \
-                            Current supported formats are .mtx and .npy")
+                            Current supported formats are .mtx, .npy, .npz, .csv, and .txt")
 
         # Capture original rows and cols of the matrix before any scaling or padding is applied
         self.origMatRows = mat.shape[0]
@@ -248,7 +255,7 @@ class RootMCA(BaseMCA):
             cols = cols +col_padding_size
 
         if mca_cols*cell_cols - cols > cell_cols:
-            reduction = int((mca_cols*cell_cols - rows)/cell_cols)
+            reduction = int((mca_cols*cell_cols - cols)/cell_cols)
             print("WARNING: The Col matrix placement efficiency on MCA Grid is not maximized! You can reduce number of MCA Grid cols by {}".format(reduction))
 
         return mat,rows,cols
@@ -395,11 +402,14 @@ class RootMCA(BaseMCA):
 
         self.allMCAStats = self.allMCAStats.reshape((self.size,self.num_mca_stats))
 
-        writeLat = self.allMCAStats[:,4]
-        writeEnergy = self.allMCAStats[:,5]
+        # Overall statistics over the device (non-root) ranks only; the root rank holds no MCA.
+        deviceStats = np.delete(self.allMCAStats, self.ROOT_PROCESS_RANK, axis=0)
 
-        readLat= self.allMCAStats[:,6]
-        readEnergy = self.allMCAStats[:,7]
+        writeLat = deviceStats[:,4]
+        writeEnergy = deviceStats[:,5]
+
+        readLat= deviceStats[:,6]
+        readEnergy = deviceStats[:,7]
 
         print("\nOverall MCA Stats:")
         print(f"EC= {self.ERR_CORR}; writeLatency Mean = {np.mean(writeLat)} [s], stddev = {np.std(writeLat)} [s]")

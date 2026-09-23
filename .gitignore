@@ -4,6 +4,7 @@ plot/
 *.so
 *.png
 *.DS_Store
+src/__pycache__/
 src/core/__pycache__/
 src/cython/mel.cpp
 solver/matvec/__pycache__/
@@ -11,3 +12,5 @@ inputs/
 reports/
 *.csv
 *.zip
+*.pyc
+/src/__pycache__

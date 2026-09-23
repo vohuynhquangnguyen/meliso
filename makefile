@@ -1,8 +1,12 @@
-#Author: Paritosh Ramanan
-#Date: January 21st 2024
+# Author: Paritosh Ramanan
+# Date: January 21st 2024
+# Contributors: Huynh (Lucius) Vo
+# Modified: Sep 22nd 2026
 
 .SECONDEXPANSION:
-IMMV_REPO = https://github.com/disys-lab/InMemMVM
+# IMMV_REPO = https://github.com/disys-lab/InMemMVM
+IMMV_REPO   ?= https://github.com/vohuynhquangnguyen/InMemMVM
+IMMV_BRANCH ?= dev
 IMMV_DIR  = .inmemmvm_tmp
 MLP_NEUROSIM = src/mlp_neurosim
 BUILD_DIR = ./build
@@ -24,14 +28,9 @@ all: get-immv
 	$(MAKE) create-build neurosim meliso
 
 get-immv:
-	@echo "Cloning or updating InMemMVM..."
-	@if [ -d "$(IMMV_DIR)/.git" ]; then \
-		echo "Repo exists — pulling latest changes..."; \
-		cd $(IMMV_DIR) && git pull; \
-	else \
-		rm -rf $(IMMV_DIR); \
-		git clone $(IMMV_REPO) $(IMMV_DIR); \
-	fi
+	@echo "Cloning InMemMVM ($(IMMV_REPO), branch $(IMMV_BRANCH))..."
+	@rm -rf $(IMMV_DIR)
+	@git clone --depth 1 -b $(IMMV_BRANCH) $(IMMV_REPO) $(IMMV_DIR)
 	@echo "Copying files into $(MLP_NEUROSIM)..."
 	@mkdir -p $(MLP_NEUROSIM)
 	@cp -a $(IMMV_DIR)/. $(MLP_NEUROSIM)/

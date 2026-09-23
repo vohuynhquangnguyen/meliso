@@ -32,6 +32,12 @@ class NonRootMCA(BaseMCA):
         self.device_type = 1
         self.interpolants = 3
 
+        # Write once, read many: the tile is programmed (W&V) when it is first received and again
+        # only when its content changes. MELISO_REENCODE=1 restores the previous behaviour of
+        # re-programming the tile on every MVM.
+        self.REENCODE = int(os.environ.get("MELISO_REENCODE", 0))
+        self._programmed_A = None
+
 
         if "DT" in os.environ.keys():
             self.device_type = int(os.environ["DT"])
@@ -66,12 +72,14 @@ class NonRootMCA(BaseMCA):
             self.meliso_obj.setInterpolants(self.interpolants)
 
         if "device_config" not in self.exp_config.keys():
-            raise Exception("ExperimentConfigFileError: Device config not specified in %s for MCA rank %s".format(expConfigFile,self.rank))
+            raise Exception(f"ExperimentConfigFileError: Device config not specified in {self.expConfigFile} for MCA rank {self.rank}")
 
         if self.device_type == 1:
             self.setConductanceProperties()
             self.setWriteProperties()
             self.setDeviceVariation()
+            self.setReadNoise()
+            self.setNonlinearWrite()
 
         else:
             print("Device type ={}, ignoring device parameters".format(self.device_type))
@@ -83,7 +91,8 @@ class NonRootMCA(BaseMCA):
         if not self.useMPI4MatDist:
             self.comm.Barrier()
         self.acquireLocalA()
-        self.initializeMCA()
+        if self.REENCODE or self._programmed_A is None or not np.array_equal(self._programmed_A, self.A):
+            self.initializeMCA()
 
     def acquireLocalA(self):
         if self.useMPI4MatDist:
@@ -108,6 +117,7 @@ class NonRootMCA(BaseMCA):
     def initializeMCA(self):
         self.meliso_obj.initializeWeights()
         self.setWeightsIncremental(self.A)
+        self._programmed_A = np.copy(self.A)
 
     def setWeights(self,A):
         self.meliso_obj.setWeights(A)
@@ -127,6 +137,15 @@ class NonRootMCA(BaseMCA):
                     break
             residuals = current_residuals
             j += 1
+
+        dump_dir = os.environ.get("ENCODED_MATRIX_DIR")
+        if dump_dir:
+            os.makedirs(dump_dir, exist_ok=True)
+            encoded = self.meliso_obj.getWeights()
+            out_path = os.path.join(dump_dir, "encoded_rank{}.npy".format(self.rank))
+            np.save(out_path, encoded)
+            print("INFO: NonRootMCA: rank {} dumped post-W&V encoded matrix to {}".format(self.rank, out_path))
+
         return j, current_residuals
 
     def parseRankList(self, rank_list):
@@ -158,7 +177,7 @@ class NonRootMCA(BaseMCA):
                 dc = yaml.safe_load(stream)
                 self.device_config = dc["Device"]
         except:
-            raise Exception("DeviceConfigFileError: Could not open device config file %s".format(device_config_path))
+            raise Exception(f"DeviceConfigFileError: Could not open device config file {device_config_path}")
 
     def setDeviceVariation(self):
         # NL_LTP, NL_LTD,sigmaDtoD,sigmaCtoC
@@ -167,7 +186,22 @@ class NonRootMCA(BaseMCA):
         sigmaDtoD = float(self.device_config["DeviceVariation"]["sigmaDtoD"])
         sigmaCtoC = float(self.device_config["DeviceVariation"]["sigmaCtoC"])
 
-        self.meliso_obj.setDeviceVariation(NL_LTP, NL_LTD, sigmaCtoC, sigmaDtoD)
+        self.meliso_obj.setDeviceVariation(NL_LTP, NL_LTD, sigmaDtoD, sigmaCtoC)
+
+    def setReadNoise(self):
+        # ReadNoise: enabled, sigmaReadNoise (relative sigma of the per-read multiplicative noise).
+        # Left at the C++ defaults (enabled, sigma 0) when the YAML has no ReadNoise block.
+        if "ReadNoise" in self.device_config:
+            rn = self.device_config["ReadNoise"]
+            enabled = int(bool(rn.get("enabled", False)))
+            sigmaReadNoise = float(rn.get("sigmaReadNoise", 0.0))
+            self.meliso_obj.setReadNoise(enabled, sigmaReadNoise)
+
+    def setNonlinearWrite(self):
+        # NonlinearWrite: enabled. Left at the C++ default (enabled) when the YAML has no block.
+        if "NonlinearWrite" in self.device_config:
+            enabled = int(bool(self.device_config["NonlinearWrite"].get("enabled", False)))
+            self.meliso_obj.setNonlinearWrite(enabled)
 
     def setWriteProperties(self):
         writeVoltageLTP = float(self.device_config["WriteProperties"]["writeVoltageLTP"])
@@ -190,18 +224,28 @@ class NonRootMCA(BaseMCA):
             avmc = self.device_config["ConductanceProperties"]["avgMaxConductance"]
             if avmc == "maxConductance":
                 avgMaxConductance = maxConductance
+            else:
+                avgMaxConductance = float(avmc)
         if "avgMinConductance" in self.device_config["ConductanceProperties"].keys():  # ["avgMaxConductance"]
             avmc = self.device_config["ConductanceProperties"]["avgMinConductance"]
             if avmc == "minConductance":
                 avgMinConductance = minConductance
+            else:
+                avgMinConductance = float(avmc)
         if "conductance" in self.device_config["ConductanceProperties"].keys():
             c = self.device_config["ConductanceProperties"]["conductance"]
             if c == "minConductance":
                 conductance = minConductance
+            else:
+                conductance = float(c)
         if "conductancePrev" in self.device_config["ConductanceProperties"].keys():
             cp = self.device_config["ConductanceProperties"]["conductancePrev"]
-            if cp == "conductancePrev":
-                conductancePrev = cp
+            if cp == "conductance":
+                conductancePrev = conductance
+            elif cp == "minConductance":
+                conductancePrev = minConductance
+            else:
+                conductancePrev = float(cp)
 
         self.meliso_obj.setConductanceProperties(maxConductance, minConductance, avgMaxConductance, avgMinConductance,
                                                  conductance, conductancePrev)
@@ -250,7 +294,8 @@ class NonRootMCA(BaseMCA):
         else:
             x = np.empty(self.locCols, dtype=np.float64)
             self.comm.Recv(x, source=self.ROOT_PROCESS_RANK)
-            self.setWeights(self.A)
+            if self._programmed_A is None:   # setMat() normally programmed the tile already
+                self.initializeMCA()
 
             start_time = time.time()
             self.y = self.localMatVec(x)
@@ -327,101 +372,42 @@ class NonRootMCA(BaseMCA):
         return y_corr
 
     def errorCorrection(self):
-        ADMM= False
-        eta = 1e-3
-        rho = 1e-3
+        """
+        MELISO+ error correction (Commun. Eng. 5, 116, 2026):
+          first order  p = v~ - y~ + u,  u = A x~,  y~ = A~ x~,  v~ = A~ x   (Eq. 7)
+          second order y = (I + lambda L^T L)^{-1} p                          (Eq. 10)
+        x~ and A~ are both produced by the adjustable write-and-verify (setWeightsIncremental).
+        """
+        self._programmed_A = None   # this path re-programs the array with X and A itself
         x = np.empty(self.locCols, dtype=np.float64)
         self.comm.Recv(x, source=self.ROOT_PROCESS_RANK)
         self.acquireLocalX(x)
 
-        samples = self.locCols
         rows = self.A.shape[0]
-        cols = self.A.shape[1]
 
-        U_tilde = np.empty((rows, 1), dtype=float)
-
-        V_tilde_a = np.empty((rows, 1), dtype=float)
-
-        V_tilde_x = np.empty((rows, 1), dtype=float)
-
-        lbda = np.zeros((rows, 1), dtype=float).flatten()
-
-        X_itrs = 0
-        A_itrs = 0
-
-        y_a = np.zeros((rows, 1), dtype=float)
-
-        y_x = np.zeros((rows, 1), dtype=float)
-
-        X_tilde = np.copy(self.X)
+        # Encode X~ (every row equals x) with W&V; u_i = <a_i, x~_i>  (u = A x~)
         self.meliso_obj.initializeWeights()
-        X_j, X_res = self.setWeightsIncremental(X_tilde)
-
-        X_itrs = X_itrs + X_j
-
+        X_j, X_res = self.setWeightsIncremental(np.copy(self.X))
         X_tilde = self.meliso_obj.getWeights()
 
+        u = np.empty(rows, dtype=np.float64)
         for i in range(rows):
-            ai = self.A[i, :].flatten()
-            ui_tilde = self.localMatVec(ai).flatten()
-            ui_tilde = self.denoiseLeastSquare(ui_tilde)
-            U_tilde[i] = ui_tilde[i]
+            u[i] = self.localMatVec(self.A[i, :].flatten()).flatten()[i]
 
-        for i in range(rows):
-            ait = self.A[i, :].flatten()
-            vi_tilde = self.localMatVec(ait).flatten()
-            vi_tilde = self.denoiseLeastSquare(vi_tilde)
-            V_tilde_x[i] = vi_tilde[i]
-
-        # # for i in range(rows):
-        r_list = np.random.randint(low=0, high=rows - 1, size=samples)
-        if ADMM:
-            for r in r_list:
-                gradX = 2 * np.dot(X_tilde[r, :], (X_tilde[r, :] - self.X[r, :]))
-                gradX = gradX - (lbda[r] + rho * (y_x[r] - y_a[r])) * (self.A[r, :] - self.A[r, :])
-                X_tilde[r, :] = X_tilde[r, :] + eta * gradX
-
+        # Encode A with W&V; y~_i = <a~_i, x~_i>  (y~ = A~ x~)  and  v~ = A~ x
         self.meliso_obj.initializeWeights()
-        # Optimize for A
         A_j, A_res = self.setWeightsIncremental(self.A)
 
-        A_itrs = A_itrs + A_j
-        #
-        A_tilde = self.meliso_obj.getWeights()
-
+        y_tt = np.empty(rows, dtype=np.float64)
         for i in range(rows):
-            xit = X_tilde[i, :].flatten()
-            vi_tilde = self.localMatVec(xit).flatten()
-            vi_tilde = self.denoiseLeastSquare(vi_tilde)
-            V_tilde_a[i] = vi_tilde[i]
+            y_tt[i] = self.localMatVec(X_tilde[i, :].flatten()).flatten()[i]
 
-        if ADMM:
-            for r in r_list:
-                gradA = 2 * np.dot(A_tilde[r, :], (A_tilde[r, :] - self.A[r, :]))
-                gradA = gradA + (lbda[r] + rho * (y_x[r] - y_a[r])) * (X_tilde[r, :] - self.X[r, :])
-                A_tilde[r, :] = A_tilde[r, :] + eta * gradA
+        v = self.localMatVec(x).flatten()
 
-        y_tilde = self.localMatVec(x)
+        p = v - y_tt + u                        # Eq. 7: the first-order terms cancel
+        y_corr = self.denoiseLeastSquare(p)     # Eq. 10: second-order denoising, applied once
+        self._programmed_A = np.copy(self.A)    # the array now holds A~; a following plain MVM need not re-program
 
-        y_tilde = self.denoiseLeastSquare(y_tilde) #np.linalg.solve(np.eye(rows) + l_dn * LTL, y_tilde)
-
-        for i in range(rows):
-            y_a[i] = y_tilde[i] - V_tilde_a[i] + U_tilde[i]  # + (DAX_tilde[i] + DXA_tilde[i])/2.0
-            y_x[i] = U_tilde[i] - V_tilde_x[i] + y_tilde[i]
-
-            # print(y_a[i]+y_x[i],y_tilde[i],V_tilde_a[i],V_tilde_x[i],U_tilde[i])
-
-        y_a = self.denoiseLeastSquare(y_a) #np.linalg.solve(np.eye(rows) + l_dn * LTL, y_a)
-        y_x = self.denoiseLeastSquare(y_x) #np.linalg.solve(np.eye(rows) + l_dn * LTL, y_x)
-
-        if ADMM:
-            for i in range(rows):
-                lbda[i] = lbda[i] + rho * (y_x[i].flatten() - y_a[i].flatten())
-
-        y_corr = (y_a + y_x)
-
-        y_corr = self.denoiseLeastSquare(y_corr)
-
-        print(f"INFO: Rank = {self.rank} : A_iter : {A_itrs}, X_iter : {X_itrs}: A_res: {A_res}, X_res: {X_res}")
+        print(f"INFO: Rank = {self.rank} : A_iter : {A_j}, X_iter : {X_j}: A_res: {A_res}, X_res: {X_res}")
 
         return y_corr
