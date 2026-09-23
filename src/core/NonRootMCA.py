@@ -38,6 +38,11 @@ class NonRootMCA(BaseMCA):
         self.RE_ENCODE = int(os.environ.get("MELISO_REENCODE", 0))
         self._programmed_A = None
 
+        # Second-order denoising (errorCorrection): lambda is chosen for every MVM by Stein's unbiased risk
+        # estimate unless DENOISE_LAMBDA fixes it (DENOISE_LAMBDA=1e-12 reproduces the paper's setting).
+        self.DENOISE_LAMBDA = float(os.environ["DENOISE_LAMBDA"]) if "DENOISE_LAMBDA" in os.environ else None
+        self.denoiseLambda = None
+
 
         if "DT" in os.environ.keys():
             self.device_type = int(os.environ["DT"])
@@ -251,20 +256,31 @@ class NonRootMCA(BaseMCA):
                                                  conductance, conductancePrev)
 
     
-    def denoiseLeastSquare(self, w, l_dn=1e-12):
+    def denoiseLeastSquare(self, w, l_dn=None, sigma2=0.0):
         """
-        Applying the Least Square denoising method.
+        Second-order denoising (Eq. 10): y = argmin_b ||b - w||^2 + lambda ||D b||^2 = (I + lambda D^T D)^{-1} w,
+        with D the (n-1) x n first-difference matrix (rows b_i - b_{i+1}). The earlier square L also had the
+        last row e_n^T, which added lambda * b_n^2 and pulled the last output towards zero.
+        lambda: l_dn if given; otherwise the minimiser of Stein's unbiased risk estimate
+            R(lambda) = ||(I - H) w||^2 - n sigma2 + 2 sigma2 tr(H),   H = (I + lambda D^T D)^{-1},
+        an unbiased estimate of E||y - b||^2 when w = b + noise of variance sigma2. lambda = 0 (no smoothing,
+        R = n sigma2) is a candidate, so smoothing is applied only when it lowers the estimated error;
+        sigma2 = 0 returns w unchanged.
         """
-        rows = self.A.shape[0]
-
-        I = np.eye(rows)
-        L = np.eye(rows)
-        for i in range(rows - 1):
-            L[i, i + 1] = -1
-        LTL = L.T @ L
-
-        y = np.linalg.solve(I+l_dn*LTL, w) #np.linalg.solve(I + lbda * L @ L.T, w)
-        return y
+        n = w.shape[0]
+        D = np.diff(np.eye(n), axis=0)
+        eig, Q = np.linalg.eigh(D.T @ D)            # H = Q diag(1 / (1 + lambda * eig)) Q^T
+        eig = np.clip(eig, 0.0, None)
+        c = Q.T @ w
+        if l_dn is None:
+            best_risk, l_dn = n * sigma2, 0.0
+            for lam in np.logspace(-4, 6, 101):
+                h = 1.0 / (1.0 + lam * eig)
+                risk = np.sum(((1.0 - h) * c) ** 2) - n * sigma2 + 2.0 * sigma2 * np.sum(h)
+                if risk < best_risk:
+                    best_risk, l_dn = risk, lam
+        self.denoiseLambda = l_dn
+        return Q @ (c / (1.0 + l_dn * eig))
 
     def localMatVec(self, x):
         """
@@ -277,6 +293,20 @@ class NonRootMCA(BaseMCA):
 
         y = RESULT_MULT * self.meliso_obj.getResults()
         
+        return y
+
+    def localMatVecSigned(self, x):
+        """
+        MVM with a signed input vector. The input driver is unsigned: loadInput stores the 16-bit input code as
+        an int and Train.cpp reads its bit-planes ((dInput >> n) & 1), so a negative entry wraps around
+        (-0.003 is applied as +0.997). The input is applied as two unsigned passes, A x = A x+ - A x-; the
+        second pass (and its read energy/latency) only happens when x has a negative entry.
+        """
+        x_pos = np.clip(x, 0.0, None)
+        x_neg = np.clip(-x, 0.0, None)
+        y = self.localMatVec(x_pos)
+        if np.any(x_neg > 0):
+            y = y - self.localMatVec(x_neg)
         return y
 
     def parallelMatVec(self):
@@ -375,8 +405,11 @@ class NonRootMCA(BaseMCA):
         """
         MELISO+ error correction (Commun. Eng. 5, 116, 2026):
           first order  p = v~ - y~ + u,  u = A x~,  y~ = A~ x~,  v~ = A~ x   (Eq. 7)
-          second order y = (I + lambda L^T L)^{-1} p                          (Eq. 10)
+          second order y = (I + lambda D^T D)^{-1} p                          (Eq. 10)
         x~ and A~ are both produced by the adjustable write-and-verify (setWeightsIncremental).
+        With A~ = A + E and x~_i = x + e_i (row i of X~): p_i = a_i^T x - E_i^T e_i, i.e. every first-order
+        term cancels and the remainder is the sum of products of the two encoding errors. x~ has negative
+        entries near x = 0, so all three MVMs use the signed input path.
         """
         self._programmed_A = None   # this path re-programs the array with X and A itself
         x = np.empty(self.locCols, dtype=np.float64)
@@ -384,6 +417,7 @@ class NonRootMCA(BaseMCA):
         self.acquireLocalX(x)
 
         rows = self.A.shape[0]
+        cols = self.A.shape[1]
 
         # Encode X~ (every row equals x) with W&V; u_i = <a_i, x~_i>  (u = A x~)
         self.meliso_obj.initializeWeights()
@@ -392,7 +426,7 @@ class NonRootMCA(BaseMCA):
 
         u = np.empty(rows, dtype=np.float64)
         for i in range(rows):
-            u[i] = self.localMatVec(self.A[i, :].flatten()).flatten()[i]
+            u[i] = self.localMatVecSigned(self.A[i, :].flatten()).flatten()[i]
 
         # Encode A with W&V; y~_i = <a~_i, x~_i>  (y~ = A~ x~)  and  v~ = A~ x
         self.meliso_obj.initializeWeights()
@@ -400,14 +434,22 @@ class NonRootMCA(BaseMCA):
 
         y_tt = np.empty(rows, dtype=np.float64)
         for i in range(rows):
-            y_tt[i] = self.localMatVec(X_tilde[i, :].flatten()).flatten()[i]
+            y_tt[i] = self.localMatVecSigned(X_tilde[i, :].flatten()).flatten()[i]
 
-        v = self.localMatVec(x).flatten()
+        v = self.localMatVecSigned(x).flatten()
 
         p = v - y_tt + u                        # Eq. 7: the first-order terms cancel
-        y_corr = self.denoiseLeastSquare(p)     # Eq. 10: second-order denoising, applied once
+        # Variance of the second-order remainder E_i^T e_i from the W&V residuals (Frobenius norms):
+        # sigma_A^2 = A_res^2 / (rows*cols), sigma_x^2 = X_res^2 / (rows*cols), Var = cols * sigma_A^2 * sigma_x^2
+        sigma2 = (A_res ** 2 / (rows * cols)) * (X_res ** 2 / (rows * cols)) * cols
+        # Eq. 10, applied once. All-zero rows (tile padding) have a known zero output and are not smoothed.
+        y_corr = np.copy(p)
+        live = np.any(self.A != 0, axis=1)
+        if np.count_nonzero(live) > 1:
+            y_corr[live] = self.denoiseLeastSquare(p[live], l_dn=self.DENOISE_LAMBDA, sigma2=sigma2)
         self._programmed_A = np.copy(self.A)    # the array now holds A~; a following plain MVM need not re-program
 
-        print(f"INFO: Rank = {self.rank} : A_iter : {A_j}, X_iter : {X_j}: A_res: {A_res}, X_res: {X_res}")
+        print(f"INFO: Rank = {self.rank} : A_iter : {A_j}, X_iter : {X_j}: A_res: {A_res}, X_res: {X_res}, "
+              f"denoise lambda: {self.denoiseLambda}")
 
         return y_corr

@@ -56,6 +56,10 @@ class RootMCA(BaseMCA):
         self.mat_max = None
         self.mat_row_sum = None
 
+        # Min-max scaling of the matrix: 1 = per row (row i has its own offset and range; mat_min and mat_max
+        # are per-row vectors), 0 = one global offset and range. Set with `rowScaling` in exp_params.
+        self.rowScaling = 1
+
         self.x_max = None
         self.x_min = None
         self.x_sum = None
@@ -103,7 +107,9 @@ class RootMCA(BaseMCA):
             self.matRows = mat.shape[0]
             self.matCols = mat.shape[1]
 
-        self.mat, self.mat_min, self.mat_max, self.mat_row_sum = self.scaleMatrix(self.mat)
+        if self.exp_config is not None and "rowScaling" in self.exp_config["exp_params"].keys():
+            self.rowScaling = int(self.exp_config["exp_params"]["rowScaling"])
+        self.mat, self.mat_min, self.mat_max, self.mat_row_sum = self.scaleMatrix(self.mat, per_row=bool(self.rowScaling))
 
         if self.exp_config is not None:
             self.hardwareOn = self.exp_config["exp_params"]["turnOnHardware"]
@@ -206,9 +212,16 @@ class RootMCA(BaseMCA):
         if not os.path.isdir(decomp_folder_name):
             os.makedirs(decomp_folder_name, exist_ok=True)
 
-    def scaleMatrix(self,mat):
+    def scaleMatrix(self,mat, per_row=False):
         mat = mat.astype(np.float64)
         mat_row_sum = np.sum(mat, axis=1)
+        if per_row:
+            # Row i: a_s_ij = (a_ij - min_j a_ij) / range_i; mat_min and mat_max (the range) are per-row vectors.
+            mat_min = mat.min(axis=1)
+            mat_max = np.ptp(mat, axis=1)
+            mat_max[mat_max == 0] = 1.0     # constant row: scales to zeros and the reversal is still exact
+            mat = (mat - mat_min[:, None]) / mat_max[:, None]
+            return mat,mat_min,mat_max,mat_row_sum
         mat_min = mat.min()
         mat -= mat_min
         mat_max = mat.ptp()

@@ -14,3 +14,9 @@ reports/
 *.zip
 *.pyc
 /src/__pycache__
+*.pyc
+*.pyc
+src/core/__pycache__/BaseMCA.cpython-310.pyc
+src/__pycache__/__init__.cpython-38.pyc
+src/core/__pycache__/BaseMCA.cpython-310.pyc
+/src/mlp_neurosim

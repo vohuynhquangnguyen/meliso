@@ -173,8 +173,8 @@ class Root:
         Args:
             n (int): The number of elements or scaling factor.
             y (np.ndarray): The scaled output vector from matrix-vector multiplication.
-            a_min (float): The minimum value used in scaling the matrix.
-            a_max (float): The maximum value used in scaling the matrix.
+            a_min (float or np.ndarray): The minimum value used in scaling the matrix (per-row vector for row-wise scaling).
+            a_max (float or np.ndarray): The range (max - min) used in scaling the matrix (per-row vector for row-wise scaling).
             a_row_sum (np.ndarray): The sum of elements in each row of the matrix.
             x_min (float): The minimum value used in scaling the input vector.
             x_max (float): The maximum value used in scaling the input vector.
@@ -183,10 +183,9 @@ class Root:
         Returns:
             np.ndarray: The corrected output vector with min-max scaling effects reversed.
         """
-        Y = np.copy(y)
-        for i in range(y.shape[0]):
-            Y[i] = Y[i] * (a_max * x_max) + a_min * x_sum + x_min * a_row_sum[i] - n * a_min * x_min
-        return Y
+        # a_min and a_max are scalars (global min-max) or per-row vectors (row-wise min-max); row by row:
+        # y_i = y_s_i * range_i * x_range + min_i * sum(x) + x_min * rowsum_i - n * min_i * x_min
+        return y * (a_max * x_max) + a_min * x_sum + x_min * a_row_sum - n * a_min * x_min
 
     def removeCorrectionY(self, n, y, a_min, a_max, a_row_sum, x_min, x_max, x_sum):
         """
@@ -196,10 +195,7 @@ class Root:
         correction done by `addCorrectionY`. 
         It uses the same scaling parameters to transform the output vector back to the scaled domain.
         """
-        Y = np.copy(y)
-        for i in range(y.shape[0]):
-            Y[i] = (Y[i] - a_min * x_sum - x_min * a_row_sum[i] + n * a_min * x_min) / (a_max * x_max)
-        return Y
+        return (y - a_min * x_sum - x_min * a_row_sum + n * a_min * x_min) / (a_max * x_max)
 
     def initializeVirtualizer(self):
         """
@@ -309,8 +305,10 @@ class Root:
 
         if correction == True:
             # Sanity check for correction parameters
-            mat_min, mat_max, mat_row_sum = __check_array_attributes__(self.mca.globalMat)
-            print(f"[INFO] Matrix attributes for correction - min: {mat_min}, max: {mat_max}, row_sum (first 5): {mat_row_sum[:5]}")
+            # (recomputed from the unscaled matrix with the same scaling as the encoded one)
+            _, mat_min, mat_max, mat_row_sum = self.mca.scaleMatrix(self.mca.globalMat, per_row=bool(self.mca.rowScaling))
+            print(f"[INFO] Matrix attributes for correction ({'per-row' if self.mca.rowScaling else 'global'}) - "
+                  f"min (first 5): {np.ravel(mat_min)[:5]}, range (first 5): {np.ravel(mat_max)[:5]}, row_sum (first 5): {mat_row_sum[:5]}")
             # Uncomment the following lines to force the matrix attributes
             # mat_min = float(self.mca.mat_min)
             # mat_max = float(self.mca.mat_max)
@@ -409,7 +407,7 @@ class Root:
             print(f"[INFO] Relative L2 error:  {relL2_orig_domain}")
             print(f"[INFO] Relative Loo error:  {relLinf_orig_domain}")
         else:
-            A_scaled_cpu, _ , _ = __minMax_Scale__(A)
+            A_scaled_cpu = self.mca.scaleMatrix(A, per_row=bool(self.mca.rowScaling))[0]
             x_scaled_cpu, _ , _ = __minMax_Scale__(x)
             y_scaled_cpu = A_scaled_cpu @ x_scaled_cpu
 
@@ -469,22 +467,6 @@ def __out_path__(name: str) -> str:
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, name)
     return name
-
-def __check_array_attributes__(array):
-    """
-    Check and return key attributes of the input array for min-max scaling.
-    
-    Args:
-        array (np.ndarray): The input array for which attributes are to be calculated.
-
-    Returns:
-        tuple: A tuple containing the minimum value, maximum value, and row-wise sum of the input 
-        array, which are essential for performing min-max scaling and its reversal.
-    """
-    array_row_sum = np.sum(array, axis=1)
-    array_min = array.min()
-    array_max = array.ptp()
-    return array_min, array_max, array_row_sum
 
 def __minMax_Scale__(array):
     """
