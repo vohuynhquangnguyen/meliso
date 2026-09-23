@@ -145,6 +145,12 @@ cdef class MelisoPy:
     def setDeviceVariation(self,NL_LTP, NL_LTD,sigmaDtoD,sigmaCtoC):
         self.melisoObj.setDeviceVariation(NL_LTP, NL_LTD,sigmaDtoD,sigmaCtoC)
 
+    def setReadNoise(self,enabled,sigmaReadNoise):
+        self.melisoObj.setReadNoise(enabled,sigmaReadNoise)
+
+    def setNonlinearWrite(self,enabled):
+        self.melisoObj.setNonlinearWrite(enabled)
+
     def getDeviceVariation(self,x,y):
         self.melisoObj.getDeviceVariation(x,y)
 

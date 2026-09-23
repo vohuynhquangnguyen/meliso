@@ -112,11 +112,14 @@ void Meliso::matVec(){
 	printf("\n");
 
 
-	//acquire the values that can change with compute operations
-    mcaStats[4] = mcaStats[4] + subArrayIH->writeLatency;
-    mcaStats[5] = mcaStats[5] + arrayIH->writeEnergy + subArrayIH->writeDynamicEnergy;
-    mcaStats[6] = mcaStats[6] + subArrayIH->readLatency;
-    mcaStats[7] = mcaStats[7] + arrayIH->readEnergy + subArrayIH->readDynamicEnergy;
+	//acquire the values that can change with compute operations.
+	//NeuroSim's counters are cumulative over the lifetime of the array (every W&V pass and every
+	//MVM adds to them), so take a snapshot here. Accumulating them again ("+=") counted the
+	//running total once more on every MVM after the first.
+    mcaStats[4] = subArrayIH->writeLatency;
+    mcaStats[5] = arrayIH->writeEnergy + subArrayIH->writeDynamicEnergy;
+    mcaStats[6] = subArrayIH->readLatency;
+    mcaStats[7] = arrayIH->readEnergy + subArrayIH->readDynamicEnergy;
 
     printf("INFO: Meliso:matVec: Read latency=%.4e s\n", mcaStats[6]);// + subArrayHO->readLatency);
     printf("INFO: Meliso:matVec: Write latency=%.4e s\n", mcaStats[4]);// + subArrayHO->writeLatency);
@@ -383,18 +386,45 @@ void Meliso::setDeviceVariation(    double NL_LTP,
                         double maxConductance = static_cast<RealDevice*>(arrayIH->cell[j][k])->maxConductance;
                         double minConductance = static_cast<RealDevice*>(arrayIH->cell[j][k])->minConductance;
 
-                        std::mt19937 localGen;	// It's OK not to use the external gen, since here the device-to-device vairation is a one-time deal
-	                    localGen.seed(std::time(0));
+                        // Draw the device-to-device variation from the shared generator (seeded once in the
+                        // constructor). A per-cell generator seeded with time(0) gave every cell the same draw.
 
                         static_cast<RealDevice*>(arrayIH->cell[j][k])->gaussian_dist2 = new std::normal_distribution<double>(0, sigmaDtoDvar);	// Set up mean and stddev for device-to-device weight update vairation
-                        static_cast<RealDevice*>(arrayIH->cell[j][k])->paramALTP = getParamA(NL_LTP + (*static_cast<AnalogNVM*>(arrayIH->cell[j][k])->gaussian_dist2)(localGen)) * maxNumLevelLTP;	// Parameter A for LTP nonlinearity
-                        static_cast<RealDevice*>(arrayIH->cell[j][k])->paramALTD = getParamA(NL_LTD + (*static_cast<AnalogNVM*>(arrayIH->cell[j][k])->gaussian_dist2)(localGen)) * maxNumLevelLTD;	// Parameter A for LTD nonlinearity
+                        static_cast<RealDevice*>(arrayIH->cell[j][k])->paramALTP = getParamA(NL_LTP + (*static_cast<AnalogNVM*>(arrayIH->cell[j][k])->gaussian_dist2)(gen)) * maxNumLevelLTP;	// Parameter A for LTP nonlinearity
+                        static_cast<RealDevice*>(arrayIH->cell[j][k])->paramALTD = getParamA(NL_LTD + (*static_cast<AnalogNVM*>(arrayIH->cell[j][k])->gaussian_dist2)(gen)) * maxNumLevelLTD;	// Parameter A for LTD nonlinearity
 
                         /* Cycle-to-cycle weight update variation */
                         //static_cast<AnalogNVM*>(arrayIH->cell[j][k])->sigmaCtoC = sigmaC2Cvar* (maxConductance - minConductance);	// Sigma of cycle-to-cycle weight update vairation: defined as the percentage of conductance range
                         static_cast<RealDevice*>(arrayIH->cell[j][k])->gaussian_dist3 = new std::normal_distribution<double>(0, sigmaCtoCvar* (maxConductance - minConductance));    // Set up mean and stddev for cycle-to-cycle weight update vairation
             }
           }
+        }
+}
+
+void Meliso::setReadNoise(int enabled, double sigmaReadNoise){
+        //ReadNoise:
+        //    enabled: true
+        //    sigmaReadNoise: 0.001 # relative sigma of the multiplicative read-current noise, drawn per cell per read
+        for (int k = 0; k < param->nInput; k++) {
+            for (int j = 0; j < param->nHide; j++) {
+                if (RealDevice *temp = dynamic_cast<RealDevice*>(arrayIH->cell[j][k])) {
+                        static_cast<RealDevice*>(arrayIH->cell[j][k])->readNoise = (enabled != 0);
+                        static_cast<RealDevice*>(arrayIH->cell[j][k])->sigmaReadNoise = sigmaReadNoise;
+                        static_cast<RealDevice*>(arrayIH->cell[j][k])->gaussian_dist = new std::normal_distribution<double>(0, sigmaReadNoise);
+                }
+            }
+        }
+}
+
+void Meliso::setNonlinearWrite(int enabled){
+        //NonlinearWrite:
+        //    enabled: false # true: NL_LTP / NL_LTD weight-update nonlinearity; false: linear conductance update
+        for (int k = 0; k < param->nInput; k++) {
+            for (int j = 0; j < param->nHide; j++) {
+                if (RealDevice *temp = dynamic_cast<RealDevice*>(arrayIH->cell[j][k])) {
+                        static_cast<RealDevice*>(arrayIH->cell[j][k])->nonlinearWrite = (enabled != 0);
+                }
+            }
         }
 }
 

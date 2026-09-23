@@ -121,6 +121,9 @@ public:
     void setDeviceVariation(double,double,double,double);
     void getDeviceVariation(int,int);
 
+    void setReadNoise(int,double);
+    void setNonlinearWrite(int);
+
     //~Meliso();
 
 };
