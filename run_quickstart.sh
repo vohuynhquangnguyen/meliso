@@ -51,6 +51,9 @@ module load gcc/7.5.0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate mpienv38
 
+# Build the C++ backend
+make clean && make clean-neurosim && mkdir build && make all
+
 # Add the local 'build' directory to Python's search path and the dynamic linker's path
 export PYTHONPATH="${PYTHONPATH:-}:./build"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:./build/"

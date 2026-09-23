@@ -35,7 +35,7 @@ class NonRootMCA(BaseMCA):
         # Write once, read many: the tile is programmed (W&V) when it is first received and again
         # only when its content changes. MELISO_REENCODE=1 restores the previous behaviour of
         # re-programming the tile on every MVM.
-        self.REENCODE = int(os.environ.get("MELISO_REENCODE", 0))
+        self.RE_ENCODE = int(os.environ.get("MELISO_REENCODE", 0))
         self._programmed_A = None
 
 
@@ -91,7 +91,7 @@ class NonRootMCA(BaseMCA):
         if not self.useMPI4MatDist:
             self.comm.Barrier()
         self.acquireLocalA()
-        if self.REENCODE or self._programmed_A is None or not np.array_equal(self._programmed_A, self.A):
+        if self.RE_ENCODE or self._programmed_A is None or not np.array_equal(self._programmed_A, self.A):
             self.initializeMCA()
 
     def acquireLocalA(self):
