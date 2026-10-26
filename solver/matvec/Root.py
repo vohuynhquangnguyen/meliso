@@ -53,8 +53,8 @@ class Root:
             maxVRows (int): Maximum virtual rows.
             maxVCols (int): Maximum virtual columns.
             x: Input vector.
-            x_min: Minimum value in vector x.
-            x_max: Maximum value in vector x.
+            x_min: Offset of the input encoding (min x for min-max inputs, 0 for signed inputs).
+            x_max: Scale of the input encoding (range of x for min-max inputs, max|x| for signed inputs).
             x_sum: Sum of vector x elements.
             virtualizer (dict): Dictionary for virtualization mappings.
         """
@@ -176,8 +176,8 @@ class Root:
             a_min (float or np.ndarray): The minimum value used in scaling the matrix (per-row vector for row-wise scaling).
             a_max (float or np.ndarray): The range (max - min) used in scaling the matrix (per-row vector for row-wise scaling).
             a_row_sum (np.ndarray): The sum of elements in each row of the matrix.
-            x_min (float): The minimum value used in scaling the input vector.
-            x_max (float): The maximum value used in scaling the input vector.
+            x_min (float): The offset of the input encoding (min x for min-max, 0 for signed inputs).
+            x_max (float): The scale of the input encoding (range of x for min-max, max|x| for signed inputs).
             x_sum (float): The sum of all elements in the input vector.
         
         Returns:
@@ -254,7 +254,7 @@ class Root:
             np.savetxt(__out_path__('global_input_vec.txt'), self.x, delimiter=',')
 
             self.x_sum = float(np.sum(self.globalX))
-            self.x, self.x_min, self.x_max, _ = self.mca.scaleMatrix(self.x)
+            self.x, self.x_min, self.x_max = self.mca.encodeInput(self.x)
             for i in range(self.maxVRows):
                 for j in range(self.maxVCols):
                     sc = self.virtualizer[i, j]["rc_limits"][1][0]
@@ -408,7 +408,7 @@ class Root:
             print(f"[INFO] Relative Loo error:  {relLinf_orig_domain}")
         else:
             A_scaled_cpu = self.mca.scaleMatrix(A, per_row=bool(self.mca.rowScaling))[0]
-            x_scaled_cpu, _ , _ = __minMax_Scale__(x)
+            x_scaled_cpu, _ , _ = self.mca.encodeInput(x)
             y_scaled_cpu = A_scaled_cpu @ x_scaled_cpu
 
             print(f"[INFO] CPU MVM Result after min-max scaling: \n {y_scaled_cpu}")
@@ -467,20 +467,3 @@ def __out_path__(name: str) -> str:
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, name)
     return name
-
-def __minMax_Scale__(array):
-    """
-    Apply min-max scaling to the input array and return the scaled array along with the minimum and 
-    maximum values.
-
-    Args:
-        array (np.ndarray): The input array to be scaled.
-    
-    Returns:
-        tuple: A tuple containing the scaled array, the minimum value of the original array, and the 
-        maximum value of the original array. The scaled array is normalized to the [0, 1] range.
-    """
-    array_min = array.min()
-    array_max = array.ptp()
-    return (array - array_min) / array_max, float(array_min), float(array_max)
-    

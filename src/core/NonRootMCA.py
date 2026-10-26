@@ -22,10 +22,14 @@ class NonRootMCA(BaseMCA):
         self.MIN_TOL = 0.0
         self.OLIM = 1
 
-        self.PRECISION = 1e-6
+        # Write-and-verify: a cell is accepted once its verify read is within WNV_TOLERANCE (weight units) of the
+        # target and is then neither written nor re-read; each verify is the mean of WNV_VERIFY_READS noisy reads.
+        # The loop stops when no verified weight changes in a pass (all cells accepted) or after ITER_LIMIT passes.
+        self.WNV_TOLERANCE = float(os.environ.get("WNV_TOLERANCE", 0.05))
+        self.WNV_VERIFY_READS = int(os.environ.get("WNV_VERIFY_READS", 4))
         self.ITER_LIMIT = int(os.environ.get("ITER_LIMIT", 21))
         self.OVERRIDE = int(os.environ.get("OVERRIDE", 0))
-        self.RESIDUALS_TOL = self.PRECISION*self.PRECISION
+        self.RESIDUALS_TOL = 1e-12
         self.Xiter = 0; self.Xresiduals = 0
         self.Aiter = 0; self.Aresiduals = 0
 
@@ -133,7 +137,7 @@ class NonRootMCA(BaseMCA):
         current_residuals = 0
 
         while j < self.ITER_LIMIT:
-            self.meliso_obj.setWeightsIncremental(A, self.PRECISION)
+            self.meliso_obj.setWeightsIncremental(A, self.WNV_TOLERANCE, self.WNV_VERIFY_READS)
             actualWeights = self.meliso_obj.getWeights()
 
             current_residuals = np.linalg.norm(actualWeights - A)
@@ -328,7 +332,7 @@ class NonRootMCA(BaseMCA):
                 self.initializeMCA()
 
             start_time = time.time()
-            self.y = self.localMatVec(x)
+            self.y = self.inputEncoding.apply(self, x)
             end_time = time.time()
             self.matVecTime = end_time - start_time
             print(f"INFO: Simple MatVec Time at Device Rank {self.rank}: {self.matVecTime}")

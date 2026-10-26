@@ -11,7 +11,7 @@ import numpy as np
 # Import MELISO+ core
 #===================================================================================================
 if "MELISO_SRC_PATH" in os.environ.keys():
-    if not os.isdir(os.environ["MELISO_SRC_PATH"]):
+    if not os.path.isdir(os.environ["MELISO_SRC_PATH"]):
         raise Exception("Env Var {} MELISO_SRC_PATH is invalid!".format(os.environ["MELISO_SRC_PATH"]))
     sys.path.append(os.environ["MELISO_SRC_PATH"])
 else:

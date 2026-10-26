@@ -34,7 +34,7 @@ cdef extern from "Meliso.h" namespace "meliso":
         void loadInput(double *)
         void initializeWeights()
         void setWeights(double *)
-        void setWeightsIncremental(double *,double)
+        void setWeightsIncremental(double *,double,int)
         void getWeights()
         void matVec()
         void getResults()

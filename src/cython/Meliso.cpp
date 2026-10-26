@@ -14,15 +14,19 @@ void Meliso::loadInput(double *x){
         }
 }
 
-void Meliso::setWeightsIncremental(double *A_matrix,double precision){
+// One write-and-verify pass. A cell whose last verified weight is within `tolerance` of its target is not
+// written (and, in WriteWeights, not re-read), so it stays accepted; every other cell gets the pulses for the
+// difference and a new verify read, the mean of `verifyReads` reads.
+void Meliso::setWeightsIncremental(double *A_matrix,double tolerance,int verifyReads){
 
+    param->numVerifyReads = verifyReads;
     getWeights();
     double d = 0;
     for (int k = 0; k < param->nHide; k++) {
                 for (int j = 0; j < param->nInput; j++){
                     deltaWeight1[k][j] = 0;
                     d = A_matrix[k*param->nInput + j]-actualWeights[k*param->nInput + j];
-                    if (fabs(d)>precision){
+                    if (fabs(d)>tolerance){
                         deltaWeight1[k][j] = A_matrix[k*param->nInput + j]-actualWeights[k*param->nInput + j];
                     }
                     //real_A_matrix[k*param->nInput + j] = A_matrix[k*param->nInput + j];

@@ -212,6 +212,10 @@ class RootMCA(BaseMCA):
         if not os.path.isdir(decomp_folder_name):
             os.makedirs(decomp_folder_name, exist_ok=True)
 
+    def encodeInput(self, x):
+        """Encode the input vector for the tiles; returns (encoded x, offset, scale) for Root.addCorrectionY."""
+        return self.inputEncoding.encode(x)
+
     def scaleMatrix(self,mat, per_row=False):
         mat = mat.astype(np.float64)
         mat_row_sum = np.sum(mat, axis=1)
@@ -224,7 +228,9 @@ class RootMCA(BaseMCA):
             return mat,mat_min,mat_max,mat_row_sum
         mat_min = mat.min()
         mat -= mat_min
-        mat_max = mat.ptp()
+        mat_max = np.ptp(mat)           # np.ptp: the ndarray.ptp() method was removed in NumPy 2.0
+        if mat_max == 0:
+            mat_max = 1.0               # constant input (e.g. x = 0): scales to zeros, the reversal is still exact
         mat /= mat_max
         return mat,mat_min,mat_max,mat_row_sum
 

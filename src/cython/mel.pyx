@@ -73,13 +73,13 @@ cdef class MelisoPy:
 
         return weights
 
-    def setWeightsIncremental(self,np_A_matrix,precision):
+    def setWeightsIncremental(self,np_A_matrix,tolerance,verifyReads):
         ctr = 0
         for i in xrange(self.m):
             for j in xrange(self.n):
                 self.A_matrix[ctr] = np_A_matrix[i][j]
                 ctr = ctr +1
-        self.melisoObj.setWeightsIncremental(self.A_matrix,precision)
+        self.melisoObj.setWeightsIncremental(self.A_matrix,tolerance,verifyReads)
 
     def setWeights(self,np_A_matrix):
         ctr = 0

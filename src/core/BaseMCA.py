@@ -5,6 +5,7 @@
 # ==================================================================================================
 import meliso
 import sys, os, yaml
+from .InputEncoding import inputEncodingNamed
 
 
 """
@@ -77,6 +78,11 @@ class BaseMCA:
             self.ERR_CORR = self.exp_config["exp_params"]["errCorr"]
         if "EC" in os.environ.keys():
             self.ERR_CORR = int(os.environ["EC"])
+
+        # --- Input encoding ("minmax" or "signed", see InputEncoding.py) ---
+        # Prefer environmental variable override; otherwise honor YAML; otherwise keep the min-max default.
+        self.inputEncoding = inputEncodingNamed(
+            os.environ.get("INPUT_ENCODING", self.exp_config["exp_params"].get("inputEncoding", "minmax")))
 
         # Check whether the MCA grid size matches the number of MPI processes
         if self.size - 1 != self.mcaRows*self.mcaCols:
